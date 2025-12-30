@@ -38,7 +38,7 @@ model = None
 class_names = []
 
 # Configuration
-MODEL_PATH = os.getenv("MODEL_PATH", "../inceptionv3_fish_final.h5")
+MODEL_PATH = os.getenv("MODEL_PATH", "./inceptionv3_fish_final.h5")
 IMG_SIZE = (224, 224)  # InceptionV3 default input size
 
 # Define your fish disease classes here
