@@ -2,8 +2,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
-import tensorflow as tf
-from tensorflow import keras
+import keras
 import numpy as np
 from PIL import Image
 import io
@@ -83,8 +82,7 @@ def preprocess_image(image: Image.Image) -> np.ndarray:
         img_array = np.array(image)
         
         # Use InceptionV3's preprocessing (scales to -1 to 1)
-        # This is critical for models trained with InceptionV3
-        img_array = tf.keras.applications.inception_v3.preprocess_input(img_array)
+        img_array = keras.applications.inception_v3.preprocess_input(img_array)
         
         # Add batch dimension
         img_array = np.expand_dims(img_array, axis=0)
