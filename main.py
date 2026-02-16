@@ -58,6 +58,14 @@ def load_model():
     global model, class_names
     try:
         logger.info(f"Loading model from {MODEL_PATH}")
+        
+        # Check if model file exists
+        if not os.path.exists(MODEL_PATH):
+            logger.warning(f"Model file not found at {MODEL_PATH}")
+            logger.warning("Please ensure the model file is available for production use")
+            # On Render, you need to upload the model file or provide it via environment
+            raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+        
         model = keras.models.load_model(MODEL_PATH)
         class_names = DISEASE_CLASSES
         logger.info("Model loaded successfully")
