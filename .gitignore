@@ -31,8 +31,8 @@ Thumbs.db
 test_images/
 uploads/
 
-# Model files (DO NOT track - too large for git)
-*.h5
+# Model files tracked via Git LFS (see .gitattributes)
+# *.h5
 *.keras
 *.pth
 *.pt
