@@ -1,16 +1,29 @@
+import os
+import gc
+
+# --- Memory Optimization (MUST be before TensorFlow import) ---
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"          # Suppress TF logs
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"          # Disable oneDNN (saves ~50MB)
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"           # Force CPU only
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"      # Aggressive memory trimming
+
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
-import keras
 import tensorflow as tf
 import numpy as np
 from PIL import Image
 import io
-import os
 import base64
 import matplotlib
 matplotlib.use('Agg')
+
+# Limit TensorFlow memory growth
+tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.threading.set_intra_op_parallelism_threads(1)
 
 # --- Configuration ---
 MODEL_PATH = "./best_inception.h5"
@@ -48,24 +61,27 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Load Model ---
+# --- Load Model (lazy — only on first request to save startup memory) ---
 model = None
 
 
 def load_model():
     global model
+    if model is not None:
+        return model
     try:
+        import keras
         model = keras.models.load_model(MODEL_PATH)
         print(f"Model loaded: {MODEL_PATH}")
         print(f"   Input shape : {model.input_shape}")
         print(f"   Output shape: {model.output_shape}")
         print(f"   Classes     : {len(DISEASE_CLASSES)}")
+        gc.collect()
+        return model
     except Exception as e:
         print(f"Model load error: {e}")
         model = None
-
-
-load_model()
+        return None
 
 
 # --- Grad-CAM ---
@@ -96,6 +112,8 @@ def generate_gradcam(img_array, model, layer_name=GRADCAM_LAYER):
     except Exception as e:
         print(f"Grad-CAM error: {e}")
         return None
+    finally:
+        gc.collect()
 
 
 def create_heatmap_overlay(original_image, heatmap, alpha=0.4):
@@ -324,7 +342,7 @@ async def root():
 @app.get("/health")
 async def health():
     return {
-        "status": "healthy" if model else "model_not_loaded",
+        "status": "healthy" if model else "model_not_loaded_yet",
         "model_loaded": model is not None,
         "num_classes": len(DISEASE_CLASSES),
         "version": "2.0.0",
@@ -336,7 +354,9 @@ async def health():
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    if model is None:
+    # Lazy load model on first prediction
+    mdl = load_model()
+    if mdl is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -352,7 +372,7 @@ async def predict(file: UploadFile = File(...)):
         img_array = np.expand_dims(img_array, axis=0)
 
         # Predict
-        predictions = model.predict(img_array, verbose=0)
+        predictions = mdl.predict(img_array, verbose=0)
         predicted_idx = int(np.argmax(predictions[0]))
         confidence = float(predictions[0][predicted_idx])
         predicted_class = DISEASE_CLASSES[predicted_idx]
@@ -362,7 +382,7 @@ async def predict(file: UploadFile = File(...)):
         gradcam_heatmap_b64 = None
         affected_area_pct = None
 
-        heatmap = generate_gradcam(img_array, model)
+        heatmap = generate_gradcam(img_array, mdl)
         if heatmap is not None:
             overlay_img = create_heatmap_overlay(original_image, heatmap)
             if overlay_img:
@@ -403,9 +423,12 @@ async def predict(file: UploadFile = File(...)):
     except Exception as e:
         print(f"Prediction error: {e}")
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+    finally:
+        gc.collect()
 
 
 # --- Run ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port, workers=1)
