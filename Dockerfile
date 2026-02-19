@@ -17,7 +17,7 @@ COPY main.py .
 COPY static/ static/
 
 # Copy model file if present
-COPY inceptionv3_fish_final.h5* ./
+COPY best_inception.h5* ./
 
 # Expose port
 EXPOSE 8000

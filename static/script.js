@@ -10,6 +10,7 @@ const resultsSection = document.getElementById('resultsSection');
 const analyzeAnotherBtn = document.getElementById('analyzeAnotherBtn');
 
 let selectedFile = null;
+let originalImageDataUrl = null;
 
 // Event Listeners
 uploadBox.addEventListener('click', () => fileInput.click());
@@ -17,6 +18,14 @@ fileInput.addEventListener('change', handleFileSelect);
 changeImageBtn.addEventListener('click', resetUpload);
 analyzeBtn.addEventListener('click', analyzeImage);
 analyzeAnotherBtn.addEventListener('click', resetUpload);
+
+// Heatmap toggle buttons
+document.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        const view = e.target.dataset.view;
+        switchHeatmapView(view);
+    });
+});
 
 // Drag and drop handlers
 uploadBox.addEventListener('dragover', (e) => {
@@ -47,13 +56,11 @@ function handleFileSelect(e) {
 }
 
 function handleFile(file) {
-    // Validate file type
     if (!file.type.startsWith('image/')) {
         alert('Please select an image file (JPG, PNG, JPEG)');
         return;
     }
 
-    // Validate file size (max 10MB)
     if (file.size > 10 * 1024 * 1024) {
         alert('File size must be less than 10MB');
         return;
@@ -61,9 +68,9 @@ function handleFile(file) {
 
     selectedFile = file;
     
-    // Show preview
     const reader = new FileReader();
     reader.onload = (e) => {
+        originalImageDataUrl = e.target.result;
         imagePreview.src = e.target.result;
         uploadBox.style.display = 'none';
         previewSection.style.display = 'block';
@@ -73,11 +80,16 @@ function handleFile(file) {
 
 function resetUpload() {
     selectedFile = null;
+    originalImageDataUrl = null;
     fileInput.value = '';
     uploadBox.style.display = 'block';
     previewSection.style.display = 'none';
     resultsSection.style.display = 'none';
     loading.style.display = 'none';
+    
+    // Hide Grad-CAM and XAI sections
+    document.getElementById('gradcamSection').style.display = 'none';
+    document.getElementById('xaiSection').style.display = 'none';
 }
 
 async function analyzeImage() {
@@ -86,12 +98,10 @@ async function analyzeImage() {
         return;
     }
 
-    // Show loading, hide preview
     previewSection.style.display = 'none';
     loading.style.display = 'block';
     resultsSection.style.display = 'none';
 
-    // Create form data
     const formData = new FormData();
     formData.append('file', selectedFile);
 
@@ -118,18 +128,15 @@ async function analyzeImage() {
 }
 
 function displayResults(data) {
-    // Show results section
     resultsSection.style.display = 'block';
 
-    // Display predicted class
+    // Predicted class
     const predictedClass = document.getElementById('predictedClass');
     predictedClass.textContent = data.predicted_class;
     
-    // Add color coding based on disease type and fish detection
     predictedClass.className = 'result-value';
     if (data.is_fish === false) {
         predictedClass.classList.add('warning');
-        predictedClass.style.color = '#f59e0b'; // Orange for non-fish
     } else if (data.predicted_class.toLowerCase().includes('healthy')) {
         predictedClass.classList.add('healthy');
     } else if (data.confidence < 0.7) {
@@ -138,28 +145,50 @@ function displayResults(data) {
         predictedClass.classList.add('danger');
     }
 
-    // Display confidence
+    // Confidence
     const confidenceValue = document.getElementById('confidenceValue');
     confidenceValue.textContent = data.confidence_percentage;
     
     const confidenceBar = document.getElementById('confidenceBar');
     confidenceBar.style.width = `${data.confidence * 100}%`;
 
-    // Display message with special styling for non-fish detection
+    // Confidence badge
+    const confidenceBadge = document.getElementById('confidenceBadge');
+    if (data.confidence >= 0.9) {
+        confidenceBadge.textContent = 'Very High';
+        confidenceBadge.className = 'confidence-badge badge-high';
+    } else if (data.confidence >= 0.7) {
+        confidenceBadge.textContent = 'High';
+        confidenceBadge.className = 'confidence-badge badge-high';
+    } else if (data.confidence >= 0.5) {
+        confidenceBadge.textContent = 'Moderate';
+        confidenceBadge.className = 'confidence-badge badge-moderate';
+    } else {
+        confidenceBadge.textContent = 'Low';
+        confidenceBadge.className = 'confidence-badge badge-low';
+    }
+
+    // Diagnosis message
     const diagnosisMessage = document.getElementById('diagnosisMessage');
     const messageBox = document.getElementById('messageBox');
     diagnosisMessage.textContent = data.message;
     
-    // Update message box styling based on result
+    messageBox.className = 'message-box';
     if (data.is_fish === false) {
-        messageBox.style.background = '#fef3c7'; // Yellow background
-        messageBox.style.borderLeft = '4px solid #f59e0b'; // Orange border
+        messageBox.classList.add('message-warning');
+    } else if (data.predicted_class.toLowerCase().includes('healthy')) {
+        messageBox.classList.add('message-success');
     } else {
-        messageBox.style.background = '#eff6ff'; // Blue background
-        messageBox.style.borderLeft = '4px solid var(--primary-color)'; // Blue border
+        messageBox.classList.add('message-danger');
     }
 
-    // Display all predictions
+    // Grad-CAM Heatmaps
+    displayGradCAM(data);
+
+    // XAI Explanation
+    displayXAI(data);
+
+    // All predictions
     const predictionsList = document.getElementById('predictionsList');
     predictionsList.innerHTML = '';
     
@@ -168,20 +197,110 @@ function displayResults(data) {
         item.className = 'prediction-item';
         
         const percentage = (prediction.confidence * 100).toFixed(2);
+        const isTop = prediction.class === data.predicted_class;
         
         item.innerHTML = `
-            <span class="prediction-name">${prediction.class}</span>
+            <span class="prediction-name ${isTop ? 'prediction-top' : ''}">${prediction.class}</span>
             <div class="prediction-bar-container">
-                <div class="prediction-bar-fill" style="width: ${percentage}%"></div>
+                <div class="prediction-bar-fill ${isTop ? 'prediction-bar-top' : ''}" style="width: ${percentage}%"></div>
             </div>
-            <span class="prediction-confidence">${percentage}%</span>
+            <span class="prediction-confidence ${isTop ? 'prediction-top' : ''}">${percentage}%</span>
         `;
         
         predictionsList.appendChild(item);
     });
 
-    // Scroll to results
-    resultsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function displayGradCAM(data) {
+    const gradcamSection = document.getElementById('gradcamSection');
+    const affectedAreaStat = document.getElementById('affectedAreaStat');
+    
+    if (data.gradcam_heatmap_overlay || data.gradcam_heatmap_only) {
+        gradcamSection.style.display = 'block';
+        
+        // Show affected area percentage
+        if (data.affected_area_percentage != null) {
+            affectedAreaStat.style.display = 'flex';
+            document.getElementById('affectedAreaPct').textContent = `${data.affected_area_percentage}%`;
+        } else {
+            affectedAreaStat.style.display = 'none';
+        }
+        
+        // Set overlay images
+        if (data.gradcam_heatmap_overlay) {
+            const overlaySrc = `data:image/png;base64,${data.gradcam_heatmap_overlay}`;
+            document.getElementById('gradcamOverlay').src = overlaySrc;
+            document.getElementById('gradcamOverlaySBS').src = overlaySrc;
+        }
+        
+        // Set original image for side-by-side
+        if (originalImageDataUrl) {
+            document.getElementById('originalImage').src = originalImageDataUrl;
+        }
+        
+        // Set heatmap-only image
+        if (data.gradcam_heatmap_only) {
+            document.getElementById('gradcamHeatmapOnly').src = `data:image/png;base64,${data.gradcam_heatmap_only}`;
+        }
+        
+        // Reset to overlay view
+        switchHeatmapView('overlay');
+    } else {
+        gradcamSection.style.display = 'none';
+        affectedAreaStat.style.display = 'none';
+    }
+}
+
+function switchHeatmapView(view) {
+    // Update toggle buttons
+    document.querySelectorAll('.toggle-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === view);
+    });
+    
+    // Update views
+    document.getElementById('viewOverlay').style.display = view === 'overlay' ? 'block' : 'none';
+    document.getElementById('viewSideBySide').style.display = view === 'sidebyside' ? 'block' : 'none';
+    document.getElementById('viewHeatmapOnly').style.display = view === 'heatmaponly' ? 'block' : 'none';
+}
+
+function displayXAI(data) {
+    const xaiSection = document.getElementById('xaiSection');
+    
+    if (data.xai) {
+        xaiSection.style.display = 'block';
+        
+        // Summary
+        const summaryEl = document.getElementById('xaiSummary');
+        summaryEl.innerHTML = `
+            <div class="xai-summary-content">
+                <span class="xai-confidence-level ${getConfidenceLevelClass(data.xai.confidence_level)}">
+                    ${data.xai.confidence_level}
+                </span>
+                <p>${data.xai.summary}</p>
+            </div>
+        `;
+        
+        // Affected Regions
+        document.getElementById('xaiRegions').textContent = data.xai.affected_regions || 'N/A';
+        
+        // Reasoning
+        document.getElementById('xaiReasoning').textContent = data.xai.reasoning || 'N/A';
+        
+        // Recommendation
+        document.getElementById('xaiRecommendation').textContent = data.xai.recommendation || 'N/A';
+    } else {
+        xaiSection.style.display = 'none';
+    }
+}
+
+function getConfidenceLevelClass(level) {
+    if (!level) return '';
+    const lower = level.toLowerCase();
+    if (lower.includes('very high') || lower.includes('high')) return 'level-high';
+    if (lower.includes('moderate') || lower.includes('medium')) return 'level-moderate';
+    return 'level-low';
 }
 
 // Health check on load
@@ -195,6 +314,11 @@ window.addEventListener('load', async () => {
         }
         
         console.log('Health check:', data);
+        
+        // Show version info if available
+        if (data.version) {
+            console.log(`API Version: ${data.version}`);
+        }
     } catch (error) {
         console.error('Health check failed:', error);
     }
