@@ -19,14 +19,6 @@ changeImageBtn.addEventListener('click', resetUpload);
 analyzeBtn.addEventListener('click', analyzeImage);
 analyzeAnotherBtn.addEventListener('click', resetUpload);
 
-// Heatmap toggle buttons
-document.querySelectorAll('.toggle-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-        const view = e.target.dataset.view;
-        switchHeatmapView(view);
-    });
-});
-
 // Drag and drop handlers
 uploadBox.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -86,10 +78,6 @@ function resetUpload() {
     previewSection.style.display = 'none';
     resultsSection.style.display = 'none';
     loading.style.display = 'none';
-    
-    // Hide Grad-CAM and XAI sections
-    document.getElementById('gradcamSection').style.display = 'none';
-    document.getElementById('xaiSection').style.display = 'none';
 }
 
 async function analyzeImage() {
@@ -182,12 +170,6 @@ function displayResults(data) {
         messageBox.classList.add('message-danger');
     }
 
-    // Grad-CAM Heatmaps
-    displayGradCAM(data);
-
-    // XAI Explanation
-    displayXAI(data);
-
     // All predictions
     const predictionsList = document.getElementById('predictionsList');
     predictionsList.innerHTML = '';
@@ -211,96 +193,6 @@ function displayResults(data) {
     });
 
     resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-function displayGradCAM(data) {
-    const gradcamSection = document.getElementById('gradcamSection');
-    const affectedAreaStat = document.getElementById('affectedAreaStat');
-    
-    if (data.gradcam_heatmap_overlay || data.gradcam_heatmap_only) {
-        gradcamSection.style.display = 'block';
-        
-        // Show affected area percentage
-        if (data.affected_area_percentage != null) {
-            affectedAreaStat.style.display = 'flex';
-            document.getElementById('affectedAreaPct').textContent = `${data.affected_area_percentage}%`;
-        } else {
-            affectedAreaStat.style.display = 'none';
-        }
-        
-        // Set overlay images
-        if (data.gradcam_heatmap_overlay) {
-            const overlaySrc = `data:image/png;base64,${data.gradcam_heatmap_overlay}`;
-            document.getElementById('gradcamOverlay').src = overlaySrc;
-            document.getElementById('gradcamOverlaySBS').src = overlaySrc;
-        }
-        
-        // Set original image for side-by-side
-        if (originalImageDataUrl) {
-            document.getElementById('originalImage').src = originalImageDataUrl;
-        }
-        
-        // Set heatmap-only image
-        if (data.gradcam_heatmap_only) {
-            document.getElementById('gradcamHeatmapOnly').src = `data:image/png;base64,${data.gradcam_heatmap_only}`;
-        }
-        
-        // Reset to overlay view
-        switchHeatmapView('overlay');
-    } else {
-        gradcamSection.style.display = 'none';
-        affectedAreaStat.style.display = 'none';
-    }
-}
-
-function switchHeatmapView(view) {
-    // Update toggle buttons
-    document.querySelectorAll('.toggle-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.view === view);
-    });
-    
-    // Update views
-    document.getElementById('viewOverlay').style.display = view === 'overlay' ? 'block' : 'none';
-    document.getElementById('viewSideBySide').style.display = view === 'sidebyside' ? 'block' : 'none';
-    document.getElementById('viewHeatmapOnly').style.display = view === 'heatmaponly' ? 'block' : 'none';
-}
-
-function displayXAI(data) {
-    const xaiSection = document.getElementById('xaiSection');
-    
-    if (data.xai) {
-        xaiSection.style.display = 'block';
-        
-        // Summary
-        const summaryEl = document.getElementById('xaiSummary');
-        summaryEl.innerHTML = `
-            <div class="xai-summary-content">
-                <span class="xai-confidence-level ${getConfidenceLevelClass(data.xai.confidence_level)}">
-                    ${data.xai.confidence_level}
-                </span>
-                <p>${data.xai.summary}</p>
-            </div>
-        `;
-        
-        // Affected Regions
-        document.getElementById('xaiRegions').textContent = data.xai.affected_regions || 'N/A';
-        
-        // Reasoning
-        document.getElementById('xaiReasoning').textContent = data.xai.reasoning || 'N/A';
-        
-        // Recommendation
-        document.getElementById('xaiRecommendation').textContent = data.xai.recommendation || 'N/A';
-    } else {
-        xaiSection.style.display = 'none';
-    }
-}
-
-function getConfidenceLevelClass(level) {
-    if (!level) return '';
-    const lower = level.toLowerCase();
-    if (lower.includes('very high') || lower.includes('high')) return 'level-high';
-    if (lower.includes('moderate') || lower.includes('medium')) return 'level-moderate';
-    return 'level-low';
 }
 
 // Health check on load

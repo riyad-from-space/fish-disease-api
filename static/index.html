@@ -3,15 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fish Disease Detection — Explainable AI Diagnosis</title>
+    <title>Fish Disease Detection</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="container">
         <header>
             <h1>🐟 Fish Disease Detection</h1>
-            <p class="subtitle">Explainable AI-Powered Diagnosis with Grad-CAM Visualization</p>
-            <p class="subtitle-small">InceptionV3 · 11 Disease Classes · Heatmap Analysis</p>
+            <p class="subtitle">AI-Powered Fish Disease Detection</p>
         </header>
 
         <main>
@@ -39,8 +38,7 @@
             <!-- Loading -->
             <div class="loading" id="loading" style="display: none;">
                 <div class="spinner"></div>
-                <p>Analyzing image with Explainable AI...</p>
-                <p class="loading-sub">Generating Grad-CAM heatmap &amp; diagnosis</p>
+                <p>Analyzing image...</p>
             </div>
 
             <!-- Results Section -->
@@ -68,87 +66,10 @@
                 </div>
 
                 <!-- Grad-CAM Heatmap Section -->
-                <div class="gradcam-section" id="gradcamSection" style="display: none;">
-                    <h3>🔥 Grad-CAM Heatmap — Affected Area Visualization</h3>
-                    <p class="gradcam-description">
-                        The heatmap highlights regions the AI focused on when making its diagnosis. 
-                        <strong>Red/yellow areas</strong> indicate high importance, while <strong>blue/green areas</strong> are less significant.
-                    </p>
-
-                    <div class="affected-area-stat" id="affectedAreaStat" style="display: none;">
-                        <span class="affected-area-icon">🎯</span>
-                        <span>Affected Area: <strong id="affectedAreaPct">—</strong> of image</span>
-                    </div>
-                    
-                    <div class="heatmap-toggle">
-                        <button class="toggle-btn active" id="toggleOverlay" data-view="overlay">Overlay View</button>
-                        <button class="toggle-btn" id="toggleSideBySide" data-view="sidebyside">Side by Side</button>
-                        <button class="toggle-btn" id="toggleHeatmapOnly" data-view="heatmaponly">Heatmap Only</button>
-                    </div>
-
-                    <!-- Overlay View (default) -->
-                    <div class="heatmap-view" id="viewOverlay">
-                        <div class="heatmap-image-wrapper">
-                            <img id="gradcamOverlay" alt="Grad-CAM Overlay">
-                            <span class="heatmap-label">Original + Heatmap Overlay</span>
-                        </div>
-                    </div>
-
-                    <!-- Side by Side View -->
-                    <div class="heatmap-view" id="viewSideBySide" style="display: none;">
-                        <div class="side-by-side">
-                            <div class="heatmap-image-wrapper">
-                                <img id="originalImage" alt="Original Image">
-                                <span class="heatmap-label">Original Image</span>
-                            </div>
-                            <div class="heatmap-image-wrapper">
-                                <img id="gradcamOverlaySBS" alt="Grad-CAM Overlay">
-                                <span class="heatmap-label">Grad-CAM Overlay</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Heatmap Only View -->
-                    <div class="heatmap-view" id="viewHeatmapOnly" style="display: none;">
-                        <div class="heatmap-image-wrapper">
-                            <img id="gradcamHeatmapOnly" alt="Grad-CAM Heatmap">
-                            <span class="heatmap-label">Heatmap Only (Activation Map)</span>
-                        </div>
-                    </div>
-                </div>
+                <div class="gradcam-section" id="gradcamSection" style="display: none;"></div>
 
                 <!-- XAI Explanation Section -->
-                <div class="xai-section" id="xaiSection" style="display: none;">
-                    <h3>🧠 Explainable AI — Interpretation</h3>
-                    
-                    <div class="xai-summary" id="xaiSummary"></div>
-
-                    <div class="xai-details">
-                        <div class="xai-card">
-                            <div class="xai-card-header">
-                                <span class="xai-icon">📍</span>
-                                <span>Affected Regions</span>
-                            </div>
-                            <p id="xaiRegions"></p>
-                        </div>
-
-                        <div class="xai-card">
-                            <div class="xai-card-header">
-                                <span class="xai-icon">🔍</span>
-                                <span>Reasoning</span>
-                            </div>
-                            <p id="xaiReasoning"></p>
-                        </div>
-
-                        <div class="xai-card">
-                            <div class="xai-card-header">
-                                <span class="xai-icon">💊</span>
-                                <span>Recommendation</span>
-                            </div>
-                            <p id="xaiRecommendation"></p>
-                        </div>
-                    </div>
-                </div>
+                <div class="xai-section" id="xaiSection" style="display: none;"></div>
 
                 <!-- All Predictions -->
                 <div class="all-predictions">
@@ -162,7 +83,6 @@
 
         <footer>
             <p>⚠️ This tool is for reference only. Please consult a professional veterinarian for accurate diagnosis.</p>
-            <p class="footer-note">Powered by InceptionV3 · Grad-CAM · Explainable AI · FastAPI v2.0</p>
         </footer>
     </div>
 
