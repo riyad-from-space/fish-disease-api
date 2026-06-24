@@ -1,10 +1,12 @@
 # 🐟 Fish Disease Detection API
 
-An AI-powered web application for detecting fish diseases from images using an InceptionV3 deep learning model.
+An AI-powered web application for detecting fish diseases from images using **ATF-Net**, an attention cross-fusion deep learning model (Custom CNN + ResNet50 + Vision Transformer) with Grad-CAM explainability.
 
 ## ✨ Features
 
-- 🤖 **AI-Powered Detection**: Uses InceptionV3 model trained for fish disease classification
+- 🤖 **AI-Powered Detection**: Uses ATF-Net (CNN + ResNet50 + ViT triple cross-attention fusion) for fish disease classification
+- 🔥 **Grad-CAM Heatmaps**: Visual explanation of where the model is looking (on the ResNet50 branch)
+- 🧠 **Explainable AI**: Per-disease reasoning, affected regions, and treatment recommendations
 - ⚡ **FastAPI Backend**: High-performance REST API with automatic documentation
 - 🎨 **Modern Web Interface**: Responsive, user-friendly interface with drag-and-drop support
 - 📊 **Real-time Analysis**: Instant predictions with confidence scores
@@ -314,9 +316,10 @@ This will activate the virtual environment and start the server.
 
 ---
 
-**Model**: InceptionV3 (21.8M parameters, 130MB)  
-**Framework**: TensorFlow 2.x  
+**Model**: ATF-Net — Custom CNN + ResNet50 + ViT-Tiny, triple cross-attention fusion (36M parameters, 146MB inference file)  
+**Framework**: TensorFlow 2.16 / Keras 3.13  
 **API**: FastAPI  
-**Preprocessing**: InceptionV3 standard preprocessing  
+**Input**: 224×224, rescaled to [0, 1] (`/255`)  
+**Grad-CAM layer**: `conv5_block3_out` (ResNet50 branch)  
 
 For questions or issues, check the logs or API documentation.

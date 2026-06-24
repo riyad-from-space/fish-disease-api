@@ -21,15 +21,33 @@ import base64
 import matplotlib
 matplotlib.use('Agg')
 
+# Custom layer definitions for the ATF-Net fusion model. Importing this module
+# registers the 8 custom Keras layers so keras.models.load_model can rebuild
+# the architecture from the .h5 file (a .h5 stores weights + config but NOT the
+# Python logic of custom layers — the class definitions must be present).
+import atf_layers
+
 # Limit TensorFlow memory growth
 tf.config.threading.set_inter_op_parallelism_threads(1)
 tf.config.threading.set_intra_op_parallelism_threads(1)
 
 # --- Configuration ---
-MODEL_PATH = "./best_inception.h5"
-IMG_SIZE = (299, 299)
-GRADCAM_LAYER = "mixed10"
+# ATF-Net = Attention Cross Fusion model: Custom CNN + ResNet50 + ViT-Tiny
+# fused with triple cross-attention. Input 224x224, 7 disease classes.
+# Inference-only model (optimizer state stripped: 434MB -> 146MB, identical
+# predictions). Re-generate from the training export with:
+#   m = keras.models.load_model("ATF_Net_Fusion_Model.h5",
+#           custom_objects=atf_layers.ATF_CUSTOM_OBJECTS, compile=False)
+#   m.save("ATF_Net_Fusion_Model_inference.h5")
+MODEL_PATH = "./ATF_Net_Fusion_Model_inference.h5"
+IMG_SIZE = (224, 224)
+# Grad-CAM is computed on the last conv block of the ResNet50 branch (the only
+# branch with a 2D spatial feature map; the ViT and the fused head are not
+# spatial). 7x7x2048 feature map at 224px input.
+GRADCAM_LAYER = "conv5_block3_out"
 
+# The 7 classes of the "Freshwater Fish Disease (Aquaculture in South Asia)"
+# dataset, in alphabetical folder order (= the model's output index order).
 DISEASE_CLASSES = [
     "Bacterial Red disease",
     "Bacterial diseases - Aeromoniasis",
@@ -37,18 +55,14 @@ DISEASE_CLASSES = [
     "Fungal diseases - Saprolegniasis",
     "Healthy Fish",
     "Parasitic diseases",
-    "Tail rot and Fin rot",
-    "Viral diseases - Lymphocystis",
-    "Viral diseases - VHS",
     "Viral diseases - White tail disease",
-    "White spot disease - Ich",
 ]
 
 # --- App Setup ---
 app = FastAPI(
     title="Fish Disease Detection API",
-    description="Explainable AI Fish Disease Detection with Grad-CAM",
-    version="2.0.0",
+    description="Explainable AI Fish Disease Detection — ATF-Net fusion model (CNN + ResNet50 + ViT) with Grad-CAM",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -63,15 +77,55 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Load Model (lazy — only on first request to save startup memory) ---
 model = None
+# Cached sub-models / layers used for Grad-CAM (built once at model load).
+_gradcam = None
+
+
+def _build_gradcam_components(mdl):
+    """Build the pieces needed for Grad-CAM on the nested ResNet50 branch.
+
+    The conv feature map lives *inside* the `feat_ResNet50` sub-model, so a
+    single keras.Model spanning the outer input to the nested conv tensor is
+    "graph disconnected". Instead we split the ResNet branch at the conv layer
+    and re-run the exact fusion head manually inside a GradientTape. All layers
+    are reused from the loaded model, so weights are shared (no extra memory).
+    """
+    import keras
+    resnet = mdl.get_layer("feat_ResNet50")
+    conv = resnet.get_layer(GRADCAM_LAYER)
+    return {
+        "resnet_to_conv": keras.Model(resnet.input, conv.output),
+        "resnet_from_conv": keras.Model(conv.output, resnet.output),
+        "cnn": mdl.get_layer("feat_Custom_CNN"),
+        "vit": mdl.get_layer("feat_ViT_B16_Tiny"),
+        "fp0": mdl.get_layer("feature_projection"),    # <- Custom CNN
+        "fp1": mdl.get_layer("feature_projection_1"),  # <- ResNet50
+        "fp2": mdl.get_layer("feature_projection_2"),  # <- ViT
+        "concat": mdl.get_layer("concat_layer"),
+        "tca": mdl.get_layer("triple_cross_attention"),
+        "dense_88": mdl.get_layer("dense_88"),
+        "add": mdl.get_layer("add_21"),
+        "head": [mdl.get_layer(n) for n in [
+            "dense_89", "batch_normalization_661", "dropout_129",
+            "dense_90", "batch_normalization_662", "dropout_130",
+            "dense_91", "batch_normalization_663", "dropout_131",
+            "dense_92",
+        ]],
+    }
 
 
 def load_model():
-    global model
+    global model, _gradcam
     if model is not None:
         return model
     try:
         import keras
-        model = keras.models.load_model(MODEL_PATH)
+        model = keras.models.load_model(
+            MODEL_PATH,
+            custom_objects=atf_layers.ATF_CUSTOM_OBJECTS,
+            compile=False,
+        )
+        _gradcam = _build_gradcam_components(model)
         print(f"Model loaded: {MODEL_PATH}")
         print(f"   Input shape : {model.input_shape}")
         print(f"   Output shape: {model.output_shape}")
@@ -81,33 +135,56 @@ def load_model():
     except Exception as e:
         print(f"Model load error: {e}")
         model = None
+        _gradcam = None
         return None
 
 
 # --- Grad-CAM ---
-def generate_gradcam(img_array, model, layer_name=GRADCAM_LAYER):
+def _fusion_forward(x, gc_parts, tape=None):
+    """Re-run the exact fusion forward pass, exposing the ResNet conv map.
+
+    Verified to reproduce model.predict() exactly (max abs diff = 0.0)."""
+    conv_map = gc_parts["resnet_to_conv"](x, training=False)
+    if tape is not None:
+        tape.watch(conv_map)
+    rvec = gc_parts["resnet_from_conv"](conv_map, training=False)
+    cvec = gc_parts["cnn"](x, training=False)
+    vvec = gc_parts["vit"](x, training=False)
+    p0 = gc_parts["fp0"](cvec, training=False)
+    p1 = gc_parts["fp1"](rvec, training=False)
+    p2 = gc_parts["fp2"](vvec, training=False)
+    fused = gc_parts["add"]([
+        gc_parts["tca"]([p0, p1, p2], training=False),
+        gc_parts["dense_88"](gc_parts["concat"]([p0, p1, p2])),
+    ])
+    h = fused
+    for layer in gc_parts["head"]:
+        h = layer(h, training=False)
+    return conv_map, h
+
+
+def generate_gradcam(img_array):
+    """Grad-CAM on the ResNet50 conv5_block3_out feature map of the fusion model."""
+    if _gradcam is None:
+        return None
     try:
-        # Keras 3 may return model.output as a list — unwrap it
-        model_output = model.output[0] if isinstance(model.output, list) else model.output
-
-        grad_model = tf.keras.Model(
-            inputs=model.input,
-            outputs=[model.get_layer(layer_name).output, model_output],
-        )
-
+        x = tf.convert_to_tensor(img_array, dtype=tf.float32)
         with tf.GradientTape() as tape:
-            conv_outputs, predictions = grad_model(img_array)
-            predicted_class = tf.argmax(predictions[0])
-            class_output = predictions[:, predicted_class]
+            conv_map, preds = _fusion_forward(x, _gradcam, tape)
+            preds = tf.cast(preds, tf.float32)
+            predicted_class = tf.argmax(preds[0])
+            class_output = preds[:, predicted_class]
 
-        grads = tape.gradient(class_output, conv_outputs)
+        grads = tape.gradient(class_output, conv_map)
+        if grads is None:
+            return None
+        grads = tf.cast(grads, tf.float32)
+        conv_map = tf.cast(conv_map, tf.float32)
         pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
-        conv_outputs = conv_outputs[0]
-        heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+        heatmap = conv_map[0] @ pooled_grads[..., tf.newaxis]
         heatmap = tf.squeeze(heatmap)
         heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
-
         return heatmap.numpy()
     except Exception as e:
         print(f"Grad-CAM error: {e}")
@@ -254,30 +331,10 @@ def get_xai_explanation(predicted_class, confidence):
             "reasoning": "The model detected signs of parasitic infestation such as unusual spots, irritation marks, or abnormal mucus production.",
             "recommendation": "Identify the specific parasite type. Treat with appropriate anti-parasitic medication (formalin, copper sulfate, or praziquantel). Quarantine new fish.",
         },
-        "Tail rot and Fin rot": {
-            "affected_regions": "Tail and fin edges - progressive erosion, fraying, and discoloration",
-            "reasoning": "The model identified deteriorating fin/tail edges with signs of bacterial necrosis and progressive tissue loss.",
-            "recommendation": "Improve water quality immediately. Treat with antibacterial medications. Ensure proper nutrition to support tissue regeneration.",
-        },
-        "Viral diseases - Lymphocystis": {
-            "affected_regions": "Skin and fins - white/grey nodular growths (cauliflower-like)",
-            "reasoning": "The model detected characteristic nodular/wart-like growths on fins or skin caused by the Lymphocystis virus.",
-            "recommendation": "No direct antiviral treatment exists. Maintain optimal water conditions. The disease is often self-limiting. Remove severely affected fish to prevent spread.",
-        },
-        "Viral diseases - VHS": {
-            "affected_regions": "Body surface - hemorrhagic areas, darkened skin, and distended abdomen",
-            "reasoning": "The model identified hemorrhagic patterns and body condition changes consistent with Viral Hemorrhagic Septicemia.",
-            "recommendation": "Quarantine affected fish immediately. Report to authorities as VHS is a notifiable disease. There is no treatment; focus on biosecurity.",
-        },
         "Viral diseases - White tail disease": {
             "affected_regions": "Tail region - distinctive white/opaque discoloration of the tail muscle",
             "reasoning": "The model focused on the tail area showing characteristic white/milky discoloration of muscle tissue.",
             "recommendation": "Isolate affected fish. Maintain optimal water quality. No specific treatment available; focus on prevention and biosecurity measures.",
-        },
-        "White spot disease - Ich": {
-            "affected_regions": "Entire body, fins, and gills - small white spots (trophonts) visible on the surface",
-            "reasoning": "The model detected the characteristic white spot pattern caused by the parasite Ichthyophthirius multifiliis.",
-            "recommendation": "Raise water temperature gradually (to 28-30C). Treat with malachite green, formalin, or copper-based medications. Treat the entire tank.",
         },
     }
 
@@ -320,11 +377,7 @@ def get_disease_message(predicted_class, confidence):
         "Fungal diseases - Saprolegniasis": f"Saprolegniasis (fungal infection) detected ({confidence:.1%} confidence). Cotton-like growths may be visible. Treat with antifungal agents.",
         "Healthy Fish": f"Your fish appears healthy ({confidence:.1%} confidence). No signs of disease detected. Continue with regular maintenance and monitoring.",
         "Parasitic diseases": f"Parasitic infection detected ({confidence:.1%} confidence). Identify the specific parasite for targeted treatment. Anti-parasitic medications may be needed.",
-        "Tail rot and Fin rot": f"Tail/Fin Rot detected ({confidence:.1%} confidence). Progressive fin deterioration observed. Improve water quality and use antibacterial treatment.",
-        "Viral diseases - Lymphocystis": f"Lymphocystis (viral) detected ({confidence:.1%} confidence). Nodular growths may be present. The disease is often self-limiting; maintain good water quality.",
-        "Viral diseases - VHS": f"Viral Hemorrhagic Septicemia detected ({confidence:.1%} confidence). This is a serious notifiable disease. Quarantine immediately and contact authorities.",
         "Viral diseases - White tail disease": f"White Tail Disease (viral) detected ({confidence:.1%} confidence). White/opaque tail discoloration observed. Isolate affected fish immediately.",
-        "White spot disease - Ich": f"White Spot Disease (Ich) detected ({confidence:.1%} confidence). Caused by Ichthyophthirius multifiliis. Raise water temperature and apply medication.",
     }
     return messages.get(
         predicted_class,
@@ -345,8 +398,9 @@ async def health():
         "status": "healthy" if model else "model_not_loaded_yet",
         "model_loaded": model is not None,
         "num_classes": len(DISEASE_CLASSES),
-        "version": "2.0.0",
+        "version": "3.0.0",
         "model_file": os.path.basename(MODEL_PATH),
+        "model_architecture": "ATF-Net (Custom CNN + ResNet50 + ViT-Tiny, triple cross-attention fusion)",
         "gradcam_layer": GRADCAM_LAYER,
         "image_size": IMG_SIZE,
     }
@@ -366,10 +420,10 @@ async def predict(file: UploadFile = File(...)):
         contents = await file.read()
         original_image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-        # Preprocess
+        # Preprocess: resize to 224x224 and scale to [0, 1]
         img = original_image.resize(IMG_SIZE)
         img_array = np.array(img) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
+        img_array = np.expand_dims(img_array, axis=0).astype("float32")
 
         # Predict
         predictions = mdl.predict(img_array, verbose=0)
@@ -382,7 +436,7 @@ async def predict(file: UploadFile = File(...)):
         gradcam_heatmap_b64 = None
         affected_area_pct = None
 
-        heatmap = generate_gradcam(img_array, mdl)
+        heatmap = generate_gradcam(img_array)
         if heatmap is not None:
             overlay_img = create_heatmap_overlay(original_image, heatmap)
             if overlay_img:

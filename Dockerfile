@@ -22,12 +22,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code (atf_layers.py defines the custom layers the model
+# needs to load — the app will NOT start without it)
 COPY main.py .
+COPY atf_layers.py .
 COPY static/ static/
 
-# Copy model file if present
-COPY best_inception.h5* ./
+# Copy the inference model (optimizer state stripped, ~146MB)
+COPY ATF_Net_Fusion_Model_inference.h5* ./
 
 # Expose port
 EXPOSE 8000

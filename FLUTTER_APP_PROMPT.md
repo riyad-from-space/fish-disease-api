@@ -1,12 +1,21 @@
-# Flutter App Update Prompt — Fish Disease Detection v2.0
+# Flutter App Update Prompt — Fish Disease Detection v3.0
 
 > **Copy and paste this entire prompt to an AI assistant (e.g., GitHub Copilot, ChatGPT) while working on your Flutter project to get the necessary code changes.**
 
 ---
 
+## What changed in v3.0 (read first)
+
+The backend now runs a new model — **ATF-Net**, an attention cross-fusion network that combines a custom CNN + ResNet50 + a Vision Transformer (ViT-Tiny) with triple cross-attention. Compared to v2.0:
+
+- **Disease classes: now 7 (was 11).** The class list below changed — update any hardcoded class names/colors.
+- **The JSON response format is otherwise IDENTICAL to v2.0.** All field names (`predicted_class`, `confidence`, `all_predictions`, `gradcam_heatmap_overlay`, `gradcam_heatmap_only`, `affected_area_percentage`, `xai`, …) are unchanged, so if your app already supports v2.0 the only required change is the 7-class list. The Grad-CAM heatmap + XAI sections keep working as-is.
+
+If your app is still on the old 7-field/pre-Grad-CAM format, follow the full guide below.
+
 ## Prompt
 
-I need to update my Flutter fish disease detection app to work with the new API v2.0 which now includes **Grad-CAM heatmap visualization** and **Explainable AI (XAI)** features. The API response format has changed significantly.
+I need to update my Flutter fish disease detection app to work with the API v3.0 which includes **Grad-CAM heatmap visualization** and **Explainable AI (XAI)** features.
 
 ### Current API Endpoint
 
@@ -50,15 +59,16 @@ The `/predict` endpoint now returns this JSON structure:
 {
   "status": "healthy",
   "model_loaded": true,
-  "num_classes": 11,
-  "version": "2.0.0",
-  "model_file": "best_inception.h5",
-  "gradcam_layer": "mixed10",
-  "image_size": [299, 299]
+  "num_classes": 7,
+  "version": "3.0.0",
+  "model_file": "ATF_Net_Fusion_Model_inference.h5",
+  "model_architecture": "ATF-Net (Custom CNN + ResNet50 + ViT-Tiny, triple cross-attention fusion)",
+  "gradcam_layer": "conv5_block3_out",
+  "image_size": [224, 224]
 }
 ```
 
-### The 11 Disease Classes (changed from 7)
+### The 7 Disease Classes (changed from 11 in v2.0)
 
 0. Bacterial Red disease
 1. Bacterial diseases - Aeromoniasis
@@ -66,11 +76,7 @@ The `/predict` endpoint now returns this JSON structure:
 3. Fungal diseases - Saprolegniasis
 4. Healthy Fish
 5. Parasitic diseases
-6. Tail rot and Fin rot
-7. Viral diseases - Lymphocystis
-8. Viral diseases - VHS
-9. Viral diseases - White tail disease
-10. White spot disease - Ich
+6. Viral diseases - White tail disease
 
 ### What I Need Updated in the Flutter App
 
@@ -108,7 +114,7 @@ Add a new expandable/collapsible section below the heatmap that shows:
 - **Recommendation** card with 💊 icon: `xai.recommendation`
 
 #### 4. **All Predictions List**
-- Update to handle 11 classes (was 7)
+- Update to handle 7 classes (was 11)
 - Highlight the top prediction in the list
 - Show percentage bars for each class
 

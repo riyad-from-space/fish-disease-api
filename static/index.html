@@ -11,7 +11,13 @@
         <header>
             <h1>🐟 Fish Disease Detection</h1>
             <p class="subtitle">Explainable AI-Powered Diagnosis with Grad-CAM Visualization</p>
-            <p class="subtitle-small">InceptionV3 · 11 Disease Classes · Heatmap Analysis</p>
+            <p class="subtitle-small" id="modelTagline">ATF-Net Fusion · 7 Disease Classes · Grad-CAM Explainability</p>
+            <div class="model-badges" title="ATF-Net: three backbones fused with triple cross-attention">
+                <span class="model-badge">🧬 Custom CNN</span>
+                <span class="model-badge">🔬 ResNet50</span>
+                <span class="model-badge">🤖 ViT-Tiny</span>
+                <span class="model-badge model-badge-fusion">⚡ Cross-Attention Fusion</span>
+            </div>
         </header>
 
         <main>
@@ -162,7 +168,7 @@
 
         <footer>
             <p>⚠️ This tool is for reference only. Please consult a professional veterinarian for accurate diagnosis.</p>
-            <p class="footer-note">Powered by InceptionV3 · Grad-CAM · Explainable AI · FastAPI v2.0</p>
+            <p class="footer-note" id="footerNote">Powered by ATF-Net (CNN + ResNet50 + ViT) · Grad-CAM · Explainable AI · FastAPI v3.0</p>
         </footer>
     </div>
 

@@ -310,14 +310,25 @@ window.addEventListener('load', async () => {
         const data = await response.json();
         
         if (!data.model_loaded) {
-            console.warn('Model not loaded properly');
+            console.warn('Model not loaded yet (it loads on the first prediction)');
         }
-        
+
         console.log('Health check:', data);
-        
-        // Show version info if available
-        if (data.version) {
-            console.log(`API Version: ${data.version}`);
+
+        // Reflect the actually-deployed model in the UI (auto-updates if the
+        // model/class count/version changes on the backend).
+        const tagline = document.getElementById('modelTagline');
+        if (tagline && data.num_classes) {
+            tagline.textContent = `ATF-Net Fusion · ${data.num_classes} Disease Classes · Grad-CAM Explainability`;
+        }
+        const footerNote = document.getElementById('footerNote');
+        if (footerNote && data.version) {
+            footerNote.textContent =
+                `Powered by ATF-Net (CNN + ResNet50 + ViT) · Grad-CAM · Explainable AI · FastAPI v${data.version}`;
+        }
+        if (data.model_architecture) {
+            const badges = document.querySelector('.model-badges');
+            if (badges) badges.title = data.model_architecture;
         }
     } catch (error) {
         console.error('Health check failed:', error);
