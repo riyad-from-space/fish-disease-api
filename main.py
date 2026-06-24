@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 import tensorflow as tf
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps, ImageFilter
 import io
 import base64
 import matplotlib
@@ -41,10 +41,13 @@ tf.config.threading.set_intra_op_parallelism_threads(1)
 #   m.save("ATF_Net_Fusion_Model_inference.h5")
 MODEL_PATH = "./ATF_Net_Fusion_Model_inference.h5"
 IMG_SIZE = (224, 224)
-# Grad-CAM is computed on the last conv block of the ResNet50 branch (the only
-# branch with a 2D spatial feature map; the ViT and the fused head are not
-# spatial). 7x7x2048 feature map at 224px input.
-GRADCAM_LAYER = "conv5_block3_out"
+# Explainability heatmap method. Classic Grad-CAM on any single branch of this
+# fusion model is frequently flat — the cross-attention fusion routes the
+# decision through the other branches, so the gradient w.r.t. one branch's conv
+# feature map vanishes. We instead use input-gradient saliency (gradient of the
+# predicted-class score w.r.t. the input pixels), which reliably highlights the
+# regions driving the prediction for every image.
+XAI_METHOD = "input-gradient saliency"
 
 # The 7 classes of the "Freshwater Fish Disease (Aquaculture in South Asia)"
 # dataset, in alphabetical folder order (= the model's output index order).
@@ -77,45 +80,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Load Model (lazy — only on first request to save startup memory) ---
 model = None
-# Cached sub-models / layers used for Grad-CAM (built once at model load).
-_gradcam = None
-
-
-def _build_gradcam_components(mdl):
-    """Build the pieces needed for Grad-CAM on the nested ResNet50 branch.
-
-    The conv feature map lives *inside* the `feat_ResNet50` sub-model, so a
-    single keras.Model spanning the outer input to the nested conv tensor is
-    "graph disconnected". Instead we split the ResNet branch at the conv layer
-    and re-run the exact fusion head manually inside a GradientTape. All layers
-    are reused from the loaded model, so weights are shared (no extra memory).
-    """
-    import keras
-    resnet = mdl.get_layer("feat_ResNet50")
-    conv = resnet.get_layer(GRADCAM_LAYER)
-    return {
-        "resnet_to_conv": keras.Model(resnet.input, conv.output),
-        "resnet_from_conv": keras.Model(conv.output, resnet.output),
-        "cnn": mdl.get_layer("feat_Custom_CNN"),
-        "vit": mdl.get_layer("feat_ViT_B16_Tiny"),
-        "fp0": mdl.get_layer("feature_projection"),    # <- Custom CNN
-        "fp1": mdl.get_layer("feature_projection_1"),  # <- ResNet50
-        "fp2": mdl.get_layer("feature_projection_2"),  # <- ViT
-        "concat": mdl.get_layer("concat_layer"),
-        "tca": mdl.get_layer("triple_cross_attention"),
-        "dense_88": mdl.get_layer("dense_88"),
-        "add": mdl.get_layer("add_21"),
-        "head": [mdl.get_layer(n) for n in [
-            "dense_89", "batch_normalization_661", "dropout_129",
-            "dense_90", "batch_normalization_662", "dropout_130",
-            "dense_91", "batch_normalization_663", "dropout_131",
-            "dense_92",
-        ]],
-    }
 
 
 def load_model():
-    global model, _gradcam
+    global model
     if model is not None:
         return model
     try:
@@ -125,7 +93,6 @@ def load_model():
             custom_objects=atf_layers.ATF_CUSTOM_OBJECTS,
             compile=False,
         )
-        _gradcam = _build_gradcam_components(model)
         print(f"Model loaded: {MODEL_PATH}")
         print(f"   Input shape : {model.input_shape}")
         print(f"   Output shape: {model.output_shape}")
@@ -135,59 +102,48 @@ def load_model():
     except Exception as e:
         print(f"Model load error: {e}")
         model = None
-        _gradcam = None
         return None
 
 
-# --- Grad-CAM ---
-def _fusion_forward(x, gc_parts, tape=None):
-    """Re-run the exact fusion forward pass, exposing the ResNet conv map.
-
-    Verified to reproduce model.predict() exactly (max abs diff = 0.0)."""
-    conv_map = gc_parts["resnet_to_conv"](x, training=False)
-    if tape is not None:
-        tape.watch(conv_map)
-    rvec = gc_parts["resnet_from_conv"](conv_map, training=False)
-    cvec = gc_parts["cnn"](x, training=False)
-    vvec = gc_parts["vit"](x, training=False)
-    p0 = gc_parts["fp0"](cvec, training=False)
-    p1 = gc_parts["fp1"](rvec, training=False)
-    p2 = gc_parts["fp2"](vvec, training=False)
-    fused = gc_parts["add"]([
-        gc_parts["tca"]([p0, p1, p2], training=False),
-        gc_parts["dense_88"](gc_parts["concat"]([p0, p1, p2])),
-    ])
-    h = fused
-    for layer in gc_parts["head"]:
-        h = layer(h, training=False)
-    return conv_map, h
-
-
+# --- Explainability heatmap (input-gradient saliency) ---
 def generate_gradcam(img_array):
-    """Grad-CAM on the ResNet50 conv5_block3_out feature map of the fusion model."""
-    if _gradcam is None:
+    """Input-gradient saliency: |d(predicted-class score)/d(input pixels)|,
+    reduced over color channels, smoothed and min-max normalized to [0, 1].
+
+    Robust for this 3-branch fusion model — classic Grad-CAM on a single branch
+    is often flat because the attention fusion routes around it, whereas the
+    gradient w.r.t. the input always reflects the regions driving the
+    prediction. Returns a 224x224 heatmap (same resolution as the input)."""
+    mdl = model
+    if mdl is None:
         return None
     try:
         x = tf.convert_to_tensor(img_array, dtype=tf.float32)
         with tf.GradientTape() as tape:
-            conv_map, preds = _fusion_forward(x, _gradcam, tape)
-            preds = tf.cast(preds, tf.float32)
+            tape.watch(x)
+            preds = tf.cast(mdl(x, training=False), tf.float32)
             predicted_class = tf.argmax(preds[0])
             class_output = preds[:, predicted_class]
 
-        grads = tape.gradient(class_output, conv_map)
+        grads = tape.gradient(class_output, x)
         if grads is None:
             return None
-        grads = tf.cast(grads, tf.float32)
-        conv_map = tf.cast(conv_map, tf.float32)
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+        grads = tf.cast(grads, tf.float32)[0].numpy()        # (H, W, 3)
+        saliency = np.max(np.abs(grads), axis=-1)            # (H, W)
 
-        heatmap = conv_map[0] @ pooled_grads[..., tf.newaxis]
-        heatmap = tf.squeeze(heatmap)
-        heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
-        return heatmap.numpy()
+        def _norm(a):
+            return (a - a.min()) / (a.max() - a.min() + 1e-8)
+
+        saliency = _norm(saliency)
+        # Smooth into a clean blob, then renormalize.
+        saliency = np.array(
+            Image.fromarray(np.uint8(saliency * 255)).filter(
+                ImageFilter.GaussianBlur(radius=6)
+            )
+        ).astype("float32") / 255.0
+        return _norm(saliency)
     except Exception as e:
-        print(f"Grad-CAM error: {e}")
+        print(f"Saliency error: {e}")
         return None
     finally:
         gc.collect()
@@ -401,7 +357,7 @@ async def health():
         "version": "3.0.0",
         "model_file": os.path.basename(MODEL_PATH),
         "model_architecture": "ATF-Net (Custom CNN + ResNet50 + ViT-Tiny, triple cross-attention fusion)",
-        "gradcam_layer": GRADCAM_LAYER,
+        "xai_method": XAI_METHOD,
         "image_size": IMG_SIZE,
     }
 
@@ -418,7 +374,10 @@ async def predict(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
-        original_image = Image.open(io.BytesIO(contents)).convert("RGB")
+        original_image = Image.open(io.BytesIO(contents))
+        # Honor EXIF orientation — phone photos are often stored rotated, and
+        # feeding a sideways fish to the model badly hurts predictions.
+        original_image = ImageOps.exif_transpose(original_image).convert("RGB")
 
         # Preprocess: resize to 224x224 and scale to [0, 1]
         img = original_image.resize(IMG_SIZE)
